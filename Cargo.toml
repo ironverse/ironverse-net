@@ -1,0 +1,10 @@
+[workspace]
+members = [ 
+    "demos/*",
+    "standalone",
+    "lib"
+]
+default-members = [
+    "standalone",
+]
+resolver="2"
