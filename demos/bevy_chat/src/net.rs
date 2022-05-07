@@ -1,7 +1,9 @@
 use bevy::tasks::Task;
 use bevy::{prelude::*, tasks::AsyncComputeTaskPool};
+use ironverse::BOOTSTRAP_ADDRESSES;
+use ironverse::libp2p::gossipsub::GossipsubMessage;
 use ironverse::{
-    Client, NetAction, 
+    Client, NetAction, NetEvent,
     tokio::sync::mpsc::error,
     libp2p::{
         swarm::SwarmEvent, 
@@ -12,69 +14,126 @@ use ironverse::{
         }
     }
 };
+use crate::ui::ChatEvent;
 
 #[derive(Default)]
-pub struct NetworkResource {
+pub struct NetResource {
     pub started: bool,
     pub client: Option<Client>,
     pub task: Option<Task<()>>,
 }
 
-pub fn network(mut res: Local<NetworkResource>, thread_pool: Res<AsyncComputeTaskPool>) {
-    if !res.started {
-        res.started = true;
+const TOPIC: &str = "test-topic";
 
-        let (client, config) = ironverse::setup();
-        res.client = Some(client);
-        info!("Local peer id: {:?}", config.local_peer_id);
+pub fn write_network(mut local: ResMut<NetResource>, mut chat_reader: EventReader<ChatEvent>) {
+    for event in chat_reader.iter() {
+        if event.is_outgoing {
+            match local.client.as_mut() {
+                None => info!("no client! message not sent: {:?}", event),
+                Some(client) => {
+                    if event.message.starts_with("/name") {
+                        if let Err(e) = client.to_net_sender.blocking_send(NetAction::Publish(Topic::new(TOPIC), event.message.clone().into())) {
+                            info!("{:?}", e);
+                        }
+                    } else if event.message.starts_with("/dial") {
+                        let parts: Vec<&str> = event.message.split(" ").collect();
+                        if parts.len() == 2 {
+                            match parts[1].parse() {
+                                Ok(addr) => if let Err(e) = client.to_net_sender.blocking_send(NetAction::Dial(addr)) { info!("{:?}", e); },
+                                Err(e) => info!("{:?}", e)
+                            }
+                        }
+                    } else if event.message.starts_with("/sub") {
+                        let parts: Vec<&str> = event.message.split(" ").collect();
+                        if parts.len() == 2 {
+                            if let Err(e) = client.to_net_sender.blocking_send(NetAction::Subscribe(Topic::new(parts[1]))) {
+                                info!("{:?}", e);
+                            };
+                        }
+                    } else if event.message.starts_with("/unsub") {
+                        let parts: Vec<&str> = event.message.split(" ").collect();
+                        if parts.len() == 2 {
+                            if let Err(e) = client.to_net_sender.blocking_send(NetAction::Unsubscribe(Topic::new(parts[1]))) {
+                                info!("{:?}", e);
+                            };
+                        }
+                    } else {
+                        if let Err(e) = client.to_net_sender.blocking_send(NetAction::Publish(Topic::new(TOPIC), event.message.clone().into())) {
+                            info!("{:?}", e);
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
 
-        res.task = Some(thread_pool.spawn(async move {
+pub fn read_network(mut local: ResMut<NetResource>, thread_pool: Res<AsyncComputeTaskPool>, mut chat_writer: EventWriter<ChatEvent>) {
+    if !local.started {
+        local.started = true;
+
+        let (client, config) = ironverse::setup(BOOTSTRAP_ADDRESSES.len() + 1);
+        chat_writer.send(ChatEvent::new_system_msg(&format!("{:?}", config.local_peer_id)));
+        
+        local.task = Some(thread_pool.spawn(async move {
             ironverse::start_swarm(config).await.unwrap();
         }));
+        for addr in BOOTSTRAP_ADDRESSES {
+            let addr = addr.parse().unwrap();
+            if let Err(e) = client.to_net_sender.blocking_send(NetAction::Dial(addr)) {
+                chat_writer.send(ChatEvent::new_system_msg(&format!("{:?}", e)));
+            }
+        }
+        client.to_net_sender.blocking_send(NetAction::Subscribe(Topic::new(TOPIC))).unwrap();
+        local.client = Some(client);
     }
     
-    match res.client.as_mut() {
+    match local.client.as_mut() {
         None => {},
         Some(client) => {
             match client.from_net_receiver.try_recv() {
                 Err(e) => {
                     match e {
                         error::TryRecvError::Empty => {},
-                        _ => info!("net receiver: {:?}", e)
+                        _ => chat_writer.send(ChatEvent::new_system_msg(&format!("{:?}", e)))
                     }
                 }
                 Ok(event) => {
-                    match_net_events(client, event);
+                    match event {
+                        NetEvent::SwarmEvent(event) => match_swarm_events(client, event, chat_writer),
+                        _ => chat_writer.send(ChatEvent::new_system_msg(&format!("{:?}", event))),
+                    }
+                    ;
                 }
             }
         }
     }
 }
 
-fn match_net_events(client: &mut Client, event: SwarmEvent<GossipsubEvent, GossipsubHandlerError>) {
+fn match_swarm_events(client: &mut Client, event: SwarmEvent<GossipsubEvent, GossipsubHandlerError>, mut chat_writer: EventWriter<ChatEvent>) {
     match event {
         SwarmEvent::Behaviour(GossipsubEvent::Message {
             propagation_source: peer_id,
-            message_id: id,
+            message_id: _,
             message,
         }) => {
-            info!(
-                "Got message: {} with id: {} from peer: {:?}",
-                String::from_utf8_lossy(&message.data),
-                id,
-                peer_id
-            );
+            chat_writer.send(parse_message(peer_id.to_string(), message));
         },
         SwarmEvent::NewListenAddr { address, .. } => {
-            info!("Listening on {:?}", address);
+            chat_writer.send(ChatEvent::new_system_msg(&format!("Listening on {:?}", address)));
         },
-        SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, concurrent_dial_errors } => {
-            info!("ConnectionEstablished with {:?}", peer_id);    
-            if let Some(_) = concurrent_dial_errors {
-                let topic = Topic::new("test-topic");
-                client.to_net_sender.blocking_send(NetAction::Publish(topic, format!("hello {}", peer_id).into()));
-            }
+        SwarmEvent::ConnectionEstablished { peer_id, endpoint: _, num_established: _, concurrent_dial_errors: _ } => {
+            chat_writer.send(ChatEvent::new_system_msg(&format!("ConnectionEstablished with {:?}", peer_id)));
         }
         _ => {}
+    }
+}
+
+fn parse_message(peer_id: String, message: GossipsubMessage) -> ChatEvent {
+    let message = String::from_utf8_lossy(&message.data).to_string();
+    ChatEvent { 
+        is_outgoing: false, 
+        sender: peer_id, 
+        message: message,
     }
 }
