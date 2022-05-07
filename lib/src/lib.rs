@@ -1,12 +1,12 @@
 use futures::{prelude::*};
 use tokio::sync::mpsc;
 use std::{
-    collections::hash_map::DefaultHasher, error::Error, time::Duration, hash::{Hash, Hasher}
+    error::Error, time::Duration
 };
 use libp2p::{
     identity, Multiaddr, PeerId, swarm::{SwarmEvent, DialError}, 
     gossipsub::{
-        self, GossipsubMessage, MessageAuthenticity, ValidationMode, MessageId, GossipsubEvent, error::{GossipsubHandlerError, SubscriptionError, PublishError}, IdentTopic as Topic
+        self, MessageAuthenticity, ValidationMode, GossipsubEvent, error::{GossipsubHandlerError, SubscriptionError, PublishError}, IdentTopic as Topic
     }
 };
 
@@ -72,17 +72,10 @@ pub async fn start_swarm(mut config: SwarmConfig) -> Result<(), Box<dyn Error>> 
     let transport = libp2p::development_transport(config.local_key.clone()).await?;
     // Create a Swarm to manage peers and events
     let mut swarm = {
-        // To content-address message, we can take the hash of message and use it as an ID.
-        let message_id_fn = |message: &GossipsubMessage| {
-            let mut s = DefaultHasher::new();
-            message.data.hash(&mut s);
-            MessageId::from(s.finish().to_string())
-        };
         // Set a custom gossipsub
         let gossipsub_config = gossipsub::GossipsubConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
             .validation_mode(ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
-            .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
             .build()?;
         // build a gossipsub network behaviour
         let gossipsub: gossipsub::Gossipsub = gossipsub::Gossipsub::new(MessageAuthenticity::Signed(config.local_key), gossipsub_config)?;

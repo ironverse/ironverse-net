@@ -100,7 +100,7 @@ pub fn read_network(mut local: ResMut<NetResource>, thread_pool: Res<AsyncComput
                 }
                 Ok(event) => {
                     match event {
-                        NetEvent::SwarmEvent(event) => match_swarm_events(client, event, chat_writer),
+                        NetEvent::SwarmEvent(event) => match_swarm_events(event, chat_writer),
                         _ => chat_writer.send(ChatEvent::new_system_msg(&format!("{:?}", event))),
                     }
                     ;
@@ -110,7 +110,7 @@ pub fn read_network(mut local: ResMut<NetResource>, thread_pool: Res<AsyncComput
     }
 }
 
-fn match_swarm_events(client: &mut Client, event: SwarmEvent<GossipsubEvent, GossipsubHandlerError>, mut chat_writer: EventWriter<ChatEvent>) {
+fn match_swarm_events(event: SwarmEvent<GossipsubEvent, GossipsubHandlerError>, mut chat_writer: EventWriter<ChatEvent>) {
     match event {
         SwarmEvent::Behaviour(GossipsubEvent::Message {
             propagation_source: peer_id,

@@ -22,8 +22,10 @@ fn main() {
         .run();
 }
 
-//TODO: loosely couple chat and net
-//TODO: simplify code
+//TODO: copy listen addr
+//TODO: implement topology
 //TODO: implement topic selection
-//TODO: fix name change
+//TODO: separate bevy events
+//TODO: loosely couple chat and net
 //TODO: in bevy system read all messages from channel each frame instead of just one
+//TODO: simplify code

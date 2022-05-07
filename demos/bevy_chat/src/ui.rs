@@ -20,36 +20,43 @@ pub struct ChatResource {
 
 pub fn chat_event_reader(mut local: ResMut<ChatResource>, mut chat_reader: EventReader<ChatEvent>) {
     for event in chat_reader.iter() {
-        let mut event = event.clone();
-        if event.message.starts_with("/name ") {
-            let name = event.message[6..].to_string();
-            event.message = format!("changed their name to {}", name);
-            event.sender = get_username(&local.name_map, event.sender);
-            local.name_map.insert(event.sender.clone(), name);
-            local.chat_history.add_line(event);
-        } else if event.message.starts_with("/pub ") {
-            event.message = event.message[5..].to_string();
-            event.sender = get_username(&local.name_map, event.sender);
-            local.chat_history.add_line(event);
+        if event.message.starts_with("/name ") && event.message.len() > 6 {
+            let old_name = get_username(&local.name_map, event.sender.clone());
+            let new_name = event.message[6..].to_string();
+            local.name_map.insert(event.sender.clone(), new_name.clone());
+            local.chat_history.add_line(ChatEvent { 
+                is_outgoing: event.is_outgoing, 
+                sender: old_name, 
+                message: format!("changed their name to {}", new_name),
+            });
+        } else if event.message.starts_with("/pub ") && event.message.len() > 5 {
+            let name = get_username(&local.name_map, event.sender.clone());
+            local.chat_history.add_line(ChatEvent { 
+                is_outgoing: event.is_outgoing, 
+                sender: name, 
+                message: event.message[5..].to_string(),
+            });
         } else {
-            local.chat_history.add_line(event);
+            local.chat_history.add_line(event.clone());
         }
     }
 }
-fn get_username(name_map: &HashMap<String, String>, mut sender: String) -> String {
-    if sender.len() >= 4 {
-        sender = sender[sender.len()-4..].to_string()
-    }
+fn get_username(name_map: &HashMap<String, String>, sender: String) -> String {
     let name = match name_map.get(&sender) {
         Some(name) => name.to_string(),
         None => String::from(""),
     };
-    format!("{}#{}", name, sender)
+    let id = if sender.len() >= 4 {
+        format!("#{}", sender[sender.len()-4..].to_string())
+    } else {
+        sender
+    };
+    format!("{}{}", name, id)
 }
 
 pub fn chat_window(mut local: ResMut<ChatResource>, mut egui_context: ResMut<EguiContext>, keyboard_input: Res<Input<KeyCode>>, mut chat_writer: EventWriter<ChatEvent>) {
     egui::Window::new("Chat Window").show(egui_context.ctx_mut(), |ui| {
-        egui::ScrollArea::new([false, true]).auto_shrink([false, false]).max_height(600.0).stick_to_bottom().show(ui, |ui|{
+        egui::ScrollArea::new([false, true]).auto_shrink([false, false]).max_height(500.0).stick_to_bottom().show(ui, |ui|{
             ui.label(local.chat_history.to_string());
         });
 
